@@ -1,6 +1,9 @@
-# DriveEasy — Car Rental Platform
+# DriveEasy Car Rental Platform
 
 A full-stack car rental booking web application built with the MERN stack.
+
+## Live Demo
+🔗 https://car-rental-client-xuyh.onrender.com
 
 ## Features
 - JWT authentication with role-based access (user / owner)
