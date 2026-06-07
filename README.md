@@ -2,9 +2,6 @@
 
 A full-stack car rental booking web application built with the MERN stack.
 
-## Live Demo
-🔗 Coming soon
-
 ## Features
 - JWT authentication with role-based access (user / owner)
 - Browse and filter cars by category, location, price, fuel type, transmission
