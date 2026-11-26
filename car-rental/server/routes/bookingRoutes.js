@@ -2,49 +2,61 @@ import express from 'express';
 import Booking from '../models/Booking.js';
 import Car from '../models/Car.js';
 import { protect, ownerOnly } from '../middleware/authMiddleware.js';
-import Stripe from 'stripe';
+import { validate } from '../middleware/validate.js';
+import { createBookingSchema, statusSchema } from '../lib/schemas.js';
+import { calcTotalDays, validateRentalDates, overlapQuery, toCents } from '../lib/bookingRules.js';
+import { getStripe } from '../lib/stripe.js';
 
 const router = express.Router();
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+
+const isBookingUser = (booking, user) => booking.user.toString() === user._id.toString();
 
 // Create booking
-router.post('/', protect, async (req, res) => {
+router.post('/', protect, validate(createBookingSchema), async (req, res, next) => {
   try {
     const { carId, pickupLocation, dropoffLocation, pickupDate, returnDate, notes } = req.body;
+
     const car = await Car.findById(carId);
     if (!car) return res.status(404).json({ success: false, message: 'Car not found' });
     if (!car.isAvailable) return res.status(400).json({ success: false, message: 'Car is not available' });
 
-    const pickup = new Date(pickupDate);
-    const returnD = new Date(returnDate);
-    const totalDays = Math.ceil((returnD - pickup) / (1000 * 60 * 60 * 24));
-    if (totalDays < 1) return res.status(400).json({ success: false, message: 'Invalid dates' });
+    const dateError = validateRentalDates(pickupDate, returnDate);
+    if (dateError) return res.status(400).json({ success: false, message: dateError });
 
-    const totalAmount = totalDays * car.pricePerDay;
+    // Refuse if another active booking already holds this car on any of these dates.
+    if (await Booking.exists(overlapQuery(carId, pickupDate, returnDate))) {
+      return res
+        .status(409)
+        .json({ success: false, message: 'This car is already booked for those dates' });
+    }
 
+    const totalDays = calcTotalDays(pickupDate, returnDate);
     const booking = await Booking.create({
       car: carId, user: req.user._id, owner: car.owner,
-      pickupLocation, dropoffLocation, pickupDate: pickup, returnDate: returnD,
-      totalDays, totalAmount, notes,
+      pickupLocation, dropoffLocation, pickupDate, returnDate,
+      totalDays, totalAmount: totalDays * car.pricePerDay, notes,
     });
 
     res.status(201).json({ success: true, booking });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    next(error);
   }
 });
 
 // Create Stripe payment intent
-router.post('/:id/pay', protect, async (req, res) => {
+router.post('/:id/pay', protect, async (req, res, next) => {
   try {
-    const booking = await Booking.findById(req.params.id).populate('car');
+    const booking = await Booking.findById(req.params.id);
     if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
-    if (booking.user.toString() !== req.user._id.toString()) {
+    if (!isBookingUser(booking, req.user)) {
       return res.status(403).json({ success: false, message: 'Not authorized' });
     }
+    if (booking.paymentStatus === 'paid' || booking.status === 'cancelled') {
+      return res.status(400).json({ success: false, message: 'This booking cannot be paid' });
+    }
 
-    const paymentIntent = await stripe.paymentIntents.create({
-      amount: booking.totalAmount * 100,
+    const paymentIntent = await getStripe().paymentIntents.create({
+      amount: toCents(booking.totalAmount),
       currency: 'usd',
       metadata: { bookingId: booking._id.toString() },
     });
@@ -54,15 +66,31 @@ router.post('/:id/pay', protect, async (req, res) => {
 
     res.json({ success: true, clientSecret: paymentIntent.client_secret });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    next(error);
   }
 });
 
-// Confirm payment
-router.post('/:id/confirm-payment', protect, async (req, res) => {
+// Confirm payment: only trust Stripe, never the caller.
+router.post('/:id/confirm-payment', protect, async (req, res, next) => {
   try {
     const booking = await Booking.findById(req.params.id);
     if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
+    if (!isBookingUser(booking, req.user)) {
+      return res.status(403).json({ success: false, message: 'Not authorized' });
+    }
+    if (booking.paymentStatus === 'paid') return res.json({ success: true, booking });
+    if (!booking.paymentIntentId) {
+      return res.status(400).json({ success: false, message: 'No payment started for this booking' });
+    }
+
+    const intent = await getStripe().paymentIntents.retrieve(booking.paymentIntentId);
+    const matches =
+      intent.status === 'succeeded' &&
+      intent.metadata?.bookingId === booking._id.toString() &&
+      intent.amount === toCents(booking.totalAmount);
+    if (!matches) {
+      return res.status(402).json({ success: false, message: 'Payment has not been completed' });
+    }
 
     booking.paymentStatus = 'paid';
     booking.status = 'confirmed';
@@ -70,24 +98,24 @@ router.post('/:id/confirm-payment', protect, async (req, res) => {
 
     res.json({ success: true, booking });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    next(error);
   }
 });
 
 // Get user's bookings
-router.get('/my-bookings', protect, async (req, res) => {
+router.get('/my-bookings', protect, async (req, res, next) => {
   try {
     const bookings = await Booking.find({ user: req.user._id })
       .populate('car', 'brand model images pricePerDay location')
       .sort({ createdAt: -1 });
     res.json({ success: true, bookings });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    next(error);
   }
 });
 
 // Get owner's bookings
-router.get('/owner-bookings', protect, ownerOnly, async (req, res) => {
+router.get('/owner-bookings', protect, ownerOnly, async (req, res, next) => {
   try {
     const bookings = await Booking.find({ owner: req.user._id })
       .populate('car', 'brand model images')
@@ -95,33 +123,32 @@ router.get('/owner-bookings', protect, ownerOnly, async (req, res) => {
       .sort({ createdAt: -1 });
     res.json({ success: true, bookings });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    next(error);
   }
 });
 
 // Update booking status (owner)
-router.put('/:id/status', protect, ownerOnly, async (req, res) => {
+router.put('/:id/status', protect, ownerOnly, validate(statusSchema), async (req, res, next) => {
   try {
-    const { status } = req.body;
     const booking = await Booking.findById(req.params.id);
     if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
     if (booking.owner.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
       return res.status(403).json({ success: false, message: 'Not authorized' });
     }
-    booking.status = status;
+    booking.status = req.body.status;
     await booking.save();
     res.json({ success: true, booking });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    next(error);
   }
 });
 
 // Cancel booking (user)
-router.put('/:id/cancel', protect, async (req, res) => {
+router.put('/:id/cancel', protect, async (req, res, next) => {
   try {
     const booking = await Booking.findById(req.params.id);
     if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
-    if (booking.user.toString() !== req.user._id.toString()) {
+    if (!isBookingUser(booking, req.user)) {
       return res.status(403).json({ success: false, message: 'Not authorized' });
     }
     if (['completed', 'cancelled'].includes(booking.status)) {
@@ -131,7 +158,7 @@ router.put('/:id/cancel', protect, async (req, res) => {
     await booking.save();
     res.json({ success: true, booking });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    next(error);
   }
 });
 
