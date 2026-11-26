@@ -194,6 +194,13 @@ describe('API hardening', () => {
     expect(res.headers['x-content-type-options']).toBe('nosniff');
   });
 
+  it('reports database status on /health', async () => {
+    const res = await request(app).get('/health');
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('ok');
+    expect(['connected', 'disconnected']).toContain(res.body.database);
+  });
+
   it('returns 404 JSON for unknown routes', async () => {
     const res = await request(app).get('/nope');
     expect(res.status).toBe(404);

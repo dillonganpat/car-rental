@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import ServerError from '../components/ServerError';
 import { useNavigate } from 'react-router-dom';
 import { Search, Shield, Clock, ThumbsUp, ChevronRight, MapPin, Calendar } from 'lucide-react';
 import { API } from '../context/AppContext';
@@ -15,14 +16,15 @@ const categories = [
 ];
 
 const features = [
-  { icon: Shield, title: 'Fully Insured', desc: 'Every rental comes with comprehensive insurance coverage.' },
-  { icon: Clock, title: '24/7 Support', desc: 'Round-the-clock customer support whenever you need help.' },
-  { icon: ThumbsUp, title: 'Best Prices', desc: 'Transparent pricing with no hidden fees. Ever.' },
+  { icon: Shield, title: 'Simple Booking', desc: 'Pick your dates, see the total price and book in a few clicks.' },
+  { icon: Clock, title: 'No Double Bookings', desc: 'A car can only be reserved once for any set of dates.' },
+  { icon: ThumbsUp, title: 'Clear Pricing', desc: 'The daily rate and the full total are shown before you book.' },
 ];
 
 export default function Home() {
   const [cars, setCars] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
   const [activeCategory, setActiveCategory] = useState('');
   const [search, setSearch] = useState('');
   const navigate = useNavigate();
@@ -34,11 +36,13 @@ export default function Home() {
   const fetchCars = async () => {
     try {
       setLoading(true);
+      setError(false);
       const params = activeCategory ? { category: activeCategory } : {};
       const { data } = await API.get('/cars', { params });
       setCars(data.cars.slice(0, 6));
     } catch {
       setCars([]);
+      setError(true);
     } finally {
       setLoading(false);
     }
@@ -61,14 +65,14 @@ export default function Home() {
           <div className="max-w-2xl">
             <div className="inline-flex items-center gap-2 bg-primary-600/20 border border-primary-500/30 rounded-full px-4 py-1.5 text-sm text-primary-300 mb-6">
               <span className="w-2 h-2 bg-primary-400 rounded-full animate-pulse" />
-              500+ Cars Available Now
+              Peer-to-peer car rental
             </div>
             <h1 className="text-4xl sm:text-5xl lg:text-6xl font-extrabold leading-tight mb-6">
               Find Your Perfect<br />
               <span className="text-primary-400">Drive Today</span>
             </h1>
             <p className="text-lg text-gray-300 mb-10 leading-relaxed">
-              Browse hundreds of cars from verified owners. Book instantly, drive confidently.
+              Browse cars listed by owners near you, pick your dates and book online.
             </p>
 
             {/* Search bar */}
@@ -115,7 +119,7 @@ export default function Home() {
         <div className="flex items-center justify-between mb-8">
           <div>
             <h2 className="text-2xl font-bold text-gray-900">Available Cars</h2>
-            <p className="text-gray-500 text-sm mt-1">Choose from our wide selection</p>
+            <p className="text-gray-500 text-sm mt-1">Browse the latest listings</p>
           </div>
           <button onClick={() => navigate('/cars')} className="flex items-center gap-1 text-sm text-primary-600 font-semibold hover:underline">
             View all <ChevronRight className="w-4 h-4" />
@@ -148,6 +152,8 @@ export default function Home() {
               </div>
             ))}
           </div>
+        ) : error ? (
+          <ServerError onRetry={fetchCars} />
         ) : cars.length > 0 ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
             {cars.map(car => <CarCard key={car._id} car={car} />)}

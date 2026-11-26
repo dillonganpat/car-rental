@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
+import mongoose from 'mongoose';
 import authRoutes from './routes/authRoutes.js';
 import carRoutes from './routes/carRoutes.js';
 import bookingRoutes from './routes/bookingRoutes.js';
@@ -38,6 +39,11 @@ export function createApp() {
   app.use('/api/bookings', bookingRoutes);
 
   app.get('/', (req, res) => res.json({ message: 'Car Rental API is running' }));
+
+  // Reports whether the database connection is up, so an outage is easy to spot.
+  app.get('/health', (req, res) =>
+    res.json({ status: 'ok', database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected' })
+  );
 
   app.use(notFound);
   app.use(errorHandler);
