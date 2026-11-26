@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import ServerError from '../components/ServerError';
 import { useSearchParams } from 'react-router-dom';
 import { SlidersHorizontal, X } from 'lucide-react';
 import { API } from '../context/AppContext';
@@ -11,6 +12,7 @@ const TRANSMISSIONS = ['automatic', 'manual'];
 export default function CarsList() {
   const [cars, setCars] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
 
@@ -28,11 +30,12 @@ export default function CarsList() {
 
   const fetchCars = async () => {
     setLoading(true);
+    setError(false);
     try {
       const params = Object.fromEntries(Object.entries(filters).filter(([, v]) => v));
       const { data } = await API.get('/cars', { params });
       setCars(data.cars);
-    } catch { setCars([]); }
+    } catch { setCars([]); setError(true); }
     finally { setLoading(false); }
   };
 
@@ -47,7 +50,7 @@ export default function CarsList() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Browse Cars</h1>
-          <p className="text-gray-500 text-sm">{loading ? '...' : `${cars.length} cars found`}</p>
+          <p className="text-gray-500 text-sm">{loading ? '...' : error ? 'Unable to load cars' : `${cars.length} cars found`}</p>
         </div>
         <button
           onClick={() => setShowFilters(!showFilters)}
@@ -132,6 +135,8 @@ export default function CarsList() {
             </div>
           ))}
         </div>
+      ) : error ? (
+        <ServerError onRetry={fetchCars} />
       ) : cars.length > 0 ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
           {cars.map(car => <CarCard key={car._id} car={car} />)}
